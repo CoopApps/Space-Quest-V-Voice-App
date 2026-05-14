@@ -80,6 +80,29 @@ header h1 .sub { color: var(--muted); font-size: 12px; font-weight: 400; margin-
 }
 .saved-hint:not(.hidden) { opacity: 1; }
 
+.admin-stats {
+    display: flex;
+    gap: 12px;
+    margin-left: 12px;
+    padding-left: 12px;
+    border-left: 1px solid var(--line);
+    font-size: 11px;
+}
+.admin-stats .stat-label { color: var(--muted); }
+.admin-stats .stat-value { color: var(--text); font-weight: 600; margin-left: 2px; }
+.admin-stats .stat-value.warn { color: var(--warn); }
+.admin-stats .stat-value.good { color: var(--good); }
+
+.contrib.focused {
+    outline: 2px solid var(--accent);
+    outline-offset: -2px;
+}
+.contrib .index-badge {
+    color: var(--muted);
+    font-size: 11px;
+    margin-right: 4px;
+}
+
 main {
     flex: 1 1 auto;
     display: grid;

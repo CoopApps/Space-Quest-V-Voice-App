@@ -152,10 +152,11 @@ def list_rooms():
 
 @app.get("/api/lines")
 def list_lines(
-    character: int | None = Query(None),
-    room:      int | None = Query(None),
-    search:    str | None = Query(None),
-    limit:     int = Query(500, le=2000),
+    character:    int | None = Query(None),
+    room:         int | None = Query(None),
+    search:       str | None = Query(None),
+    needs_review: bool = Query(False),
+    limit:        int  = Query(500, le=2000),
 ):
     where = ["l.talker_id NOT IN (97, 98)"]
     params: list = []
@@ -168,6 +169,17 @@ def list_lines(
     if search:
         where.append("l.text LIKE ? COLLATE NOCASE")
         params.append(f"%{search}%")
+    if needs_review:
+        # Multi-contribution lines that don't yet have a canonical pick.
+        where.append("""(
+            SELECT COUNT(*) FROM contributions c2
+            WHERE c2.module=l.module AND c2.noun=l.noun AND c2.verb=l.verb
+                  AND c2.cond=l.cond AND c2.seq=l.seq
+        ) >= 2 AND NOT EXISTS (
+            SELECT 1 FROM contributions c3
+            WHERE c3.module=l.module AND c3.noun=l.noun AND c3.verb=l.verb
+                  AND c3.cond=l.cond AND c3.seq=l.seq AND c3.selected=1
+        )""")
     where_sql = " AND ".join(where)
 
     with open_db(DB_PATH) as con:
@@ -323,6 +335,39 @@ def get_contribution_audio(contribution_id: int):
 # ---------------------------------------------------------------------------
 # Admin
 # ---------------------------------------------------------------------------
+
+@app.get("/api/admin/stats", dependencies=[Depends(require_admin)])
+def admin_stats():
+    """Counts the admin cares about: how much work remains."""
+    with open_db(DB_PATH) as con:
+        row = con.execute("""
+            SELECT
+              (SELECT COUNT(*) FROM lines WHERE talker_id NOT IN (97,98))
+                AS total_lines,
+              (SELECT COUNT(DISTINCT module || '-' || noun || '-' || verb || '-' || cond || '-' || seq)
+                 FROM contributions) AS lines_with_contribs,
+              (SELECT COUNT(*)
+                 FROM contributions WHERE selected=1) AS canonical_picks,
+              (SELECT COUNT(*) FROM contributions)    AS total_contribs
+        """).fetchone()
+        # "Needs review" = lines with ≥2 contributions but no canonical.
+        needs = con.execute("""
+            SELECT COUNT(*) FROM (
+                SELECT module, noun, verb, cond, seq
+                FROM contributions
+                GROUP BY module, noun, verb, cond, seq
+                HAVING COUNT(*) >= 2
+                   AND SUM(selected) = 0
+            )
+        """).fetchone()[0]
+    return {
+        "total_lines":         row["total_lines"],
+        "lines_with_contribs": row["lines_with_contribs"],
+        "canonical_picks":     row["canonical_picks"],
+        "total_contribs":      row["total_contribs"],
+        "needs_review":        needs,
+    }
+
 
 @app.post("/api/admin/select/{contribution_id}", dependencies=[Depends(require_admin)])
 def admin_select(contribution_id: int):

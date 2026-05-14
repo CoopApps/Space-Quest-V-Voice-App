@@ -155,6 +155,7 @@ async function loadLines() {
     if (state.search)            params.set("search", state.search);
     else if (state.selectedCharacter !== null) params.set("character", state.selectedCharacter);
     else if (state.selectedRoom !== null)      params.set("room",      state.selectedRoom);
+    if (state.statusFilter === "needs-review") params.set("needs_review", "1");
 
     let lines;
     try {
@@ -167,9 +168,10 @@ async function loadLines() {
     // Client-side status filter on top of server query.
     const f = state.statusFilter;
     lines = lines.filter(l => {
-        if (f === "missing")     return l.contribution_count === 0;
-        if (f === "contributed") return l.contribution_count > 0;
-        if (f === "selected")    return l.selected_id !== null;
+        if (f === "missing")      return l.contribution_count === 0;
+        if (f === "contributed")  return l.contribution_count > 0;
+        if (f === "selected")     return l.selected_id !== null;
+        if (f === "needs-review") return l.contribution_count >= 2 && !l.selected_id;
         return true;
     });
 
@@ -266,7 +268,7 @@ function renderDetail() {
         <div class="contributions" id="contributions">
             ${contributions.length === 0
                 ? '<p class="empty">No recordings yet for this line.</p>'
-                : contributions.map(c => renderContribution(c, adminEnabled)).join("")}
+                : contributions.map((c, i) => renderContribution(c, adminEnabled, i + 1)).join("")}
         </div>
     `;
     $("#detail").innerHTML = html;
@@ -281,12 +283,13 @@ function renderDetail() {
     wireContributions(adminEnabled);
 }
 
-function renderContribution(c, adminEnabled) {
+function renderContribution(c, adminEnabled, index = 0) {
     const cls = "contrib" + (c.selected ? " selected" : "");
+    const badge = adminEnabled && index ? `<span class="index-badge">[${index}]</span>` : "";
     return `
         <div class="${cls}" data-id="${c.id}">
             <div class="meta">
-                <span class="by">${escapeHtml(c.contributor || "anonymous")}</span>
+                <span class="by">${badge}${escapeHtml(c.contributor || "anonymous")}</span>
                 <span class="when">${escapeHtml(c.uploaded_at)}${
                     c.duration_sec
                         ? ` · ${c.duration_sec.toFixed(1)}s`
@@ -598,5 +601,122 @@ $("#btn-compile").onclick = () =>
 $("#btn-compile-aud").onclick = () =>
     downloadCompile("/api/admin/compile/aud", "sq5_audio.zip",         "RESOURCE.AUD bundle");
 
+// ---------------------------------------------------------------------------
+// Admin stats strip (header) — shown only when an admin token is set.
+// ---------------------------------------------------------------------------
+
+async function refreshAdminStats() {
+    const el = $("#admin-stats");
+    if (!state.adminToken) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+    try {
+        const r = await fetch("/api/admin/stats", {
+            headers: { "X-Admin-Token": state.adminToken },
+        });
+        if (!r.ok) { el.classList.add("hidden"); el.innerHTML = ""; return; }
+        const s = await r.json();
+        const reviewClass = s.needs_review > 0 ? "warn" : "good";
+        el.innerHTML = `
+            <span><span class="stat-label">Contribs:</span>
+                  <span class="stat-value">${s.total_contribs}</span></span>
+            <span><span class="stat-label">Picks:</span>
+                  <span class="stat-value good">${s.canonical_picks}</span></span>
+            <span><span class="stat-label">Needs review:</span>
+                  <span class="stat-value ${reviewClass}">${s.needs_review}</span></span>
+        `;
+        el.classList.remove("hidden");
+    } catch (e) {
+        el.classList.add("hidden");
+    }
+}
+
+// Patch admin-token input + refreshAll to also pull admin stats.
+const _origAdminInput = $("#admin-token").oninput;
+$("#admin-token").oninput = e => {
+    _origAdminInput(e);
+    refreshAdminStats();
+};
+const _origRefreshAll = refreshAll;
+refreshAll = function () {
+    return Promise.all([_origRefreshAll(), refreshAdminStats()]);
+};
+
+// ---------------------------------------------------------------------------
+// Keyboard shortcuts (active when an admin is logged in).
+//   J / ↓ : next line                 K / ↑ : previous line
+//   Enter : play first contribution   1..9 : pick that contribution canonical
+//   ⇧+D   : delete focused contribution (with confirm)
+// Shortcuts are ignored while typing in an input/textarea/select.
+// ---------------------------------------------------------------------------
+
+let _focusedContribIdx = 0;
+
+document.addEventListener("keydown", async (e) => {
+    const t = e.target;
+    if (t && /^(INPUT|TEXTAREA|SELECT)$/.test(t.tagName)) return;
+    if (!state.adminToken) return;   // shortcuts are admin-only
+
+    const rows = $$(".line-row");
+    const activeRow = rows.findIndex(r => r.classList.contains("active"));
+
+    const moveTo = (idx) => {
+        if (idx < 0 || idx >= rows.length) return;
+        rows[idx].scrollIntoView({ block: "nearest" });
+        rows[idx].click();
+    };
+
+    if (e.key === "j" || e.key === "ArrowDown") {
+        e.preventDefault();
+        moveTo(activeRow < 0 ? 0 : activeRow + 1);
+        return;
+    }
+    if (e.key === "k" || e.key === "ArrowUp") {
+        e.preventDefault();
+        moveTo(activeRow < 0 ? 0 : activeRow - 1);
+        return;
+    }
+
+    // Contribution-level shortcuts require the detail panel be open.
+    const contribs = $$("#contributions .contrib");
+    if (contribs.length === 0) return;
+
+    if (e.key >= "1" && e.key <= "9") {
+        e.preventDefault();
+        const idx = parseInt(e.key, 10) - 1;
+        if (idx >= contribs.length) return;
+        const id = parseInt(contribs[idx].dataset.id, 10);
+        try {
+            await api.post(`/api/admin/select/${id}`, undefined, false, true);
+            setStatus(`Picked contribution #${idx + 1} as canonical.`);
+            if (state.activeLineKey) await openLine(state.activeLineKey);
+            refreshAll();
+        } catch (err) { setStatus(err.message); }
+        return;
+    }
+
+    if (e.key === "Enter") {
+        e.preventDefault();
+        const idx = _focusedContribIdx < contribs.length ? _focusedContribIdx : 0;
+        const audio = contribs[idx].querySelector("audio");
+        if (audio) {
+            audio.currentTime = 0;
+            audio.play();
+        }
+        return;
+    }
+
+    if (e.key === "D" && e.shiftKey) {
+        e.preventDefault();
+        if (contribs.length === 0) return;
+        if (!confirm("Delete the first contribution for this line?")) return;
+        const id = parseInt(contribs[0].dataset.id, 10);
+        try {
+            await api.del(`/api/admin/contributions/${id}`, true);
+            setStatus("Deleted.");
+            if (state.activeLineKey) await openLine(state.activeLineKey);
+            refreshAll();
+        } catch (err) { setStatus(err.message); }
+    }
+});
+
 // Initial load
-refreshAll().then(() => setStatus("Ready."));
+refreshAll().then(() => setStatus("Ready. Tip: enter admin token, then J/K to navigate, 1–9 to pick canonical."));
