@@ -822,12 +822,18 @@ class MainWindow(QMainWindow):
         self.status_bar.showMessage("Recording captured — review and Accept or Discard")
 
     def _play_pending(self):
-        if self._pending_wav:
-            Recorder.play_wav_bytes(self._pending_wav, self._mic_device_id())
-        elif self._current_line and self._current_line.get("wav_path"):
-            wav = Path(self._current_line["wav_path"])
-            if wav.exists():
-                Recorder.play_wav(wav)
+        # Playback uses the system default output (None) — passing the mic
+        # device id here crashes sounddevice because mic devices have no
+        # output channels.
+        try:
+            if self._pending_wav:
+                Recorder.play_wav_bytes(self._pending_wav, device_id=None)
+            elif self._current_line and self._current_line.get("wav_path"):
+                wav = Path(self._current_line["wav_path"])
+                if wav.exists():
+                    Recorder.play_wav(wav)
+        except Exception as e:
+            QMessageBox.warning(self, "Playback Error", str(e))
 
     def _accept_recording(self):
         if self._pending_wav is None or self._current_line is None:
