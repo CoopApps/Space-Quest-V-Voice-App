@@ -72,14 +72,27 @@ def _resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
         ).astype(np.float32)
 
 
+def _remove_dc_offset(samples: np.ndarray) -> np.ndarray:
+    """
+    Subtract the mean of the signal so it's centered on zero.  A
+    recording with even a small DC offset reads as silence-at-non-128
+    once encoded to 8-bit unsigned PCM, and the step from real silence
+    (128) to that biased "silence" at the start of every clip produces
+    an audible thud.
+    """
+    if len(samples) == 0:
+        return samples
+    return samples - float(samples.mean())
+
+
 def _apply_edge_fades(samples: np.ndarray, sample_rate: int,
-                      fade_ms: float = 5.0) -> np.ndarray:
+                      fade_ms: float = 12.0) -> np.ndarray:
     """
     Apply a short linear fade-in/out so the clip starts and ends at
-    zero amplitude.  Prevents the audible "click" caused by abrupt
-    steps between adjacent clips during playback (each SOL clip in
-    RESOURCE.AUD plays back-to-back, so any non-zero start/end sample
-    creates a discontinuity that pops on the speakers).
+    zero amplitude.  Prevents the audible "click" / "thud" caused by
+    abrupt steps between adjacent clips during playback (each SOL clip
+    in RESOURCE.AUD plays back-to-back, so any non-zero start/end
+    sample creates a discontinuity).
     """
     n_fade = max(1, int(sample_rate * fade_ms / 1000.0))
     if len(samples) < 2 * n_fade:
@@ -92,7 +105,17 @@ def _apply_edge_fades(samples: np.ndarray, sample_rate: int,
 
 
 def _float_to_uint8(samples: np.ndarray) -> bytes:
-    pcm = ((np.clip(samples, -1.0, 1.0) + 1.0) * 127.5).astype(np.uint8)
+    """
+    Convert float samples in [-1, 1] to 8-bit unsigned PCM.
+
+    8-bit unsigned silence is *exactly* 128.  The previous formula
+    `(s + 1) * 127.5` floored 0.0 to 127, which leaves a 1-step DC
+    offset right at the start of every clip relative to the engine's
+    silence value — audible as a soft thud on transitions.  We now
+    round explicitly and clip to [0, 255].
+    """
+    centered = np.clip(samples, -1.0, 1.0) * 127.0
+    pcm = np.round(centered + 128.0).clip(0, 255).astype(np.uint8)
     return pcm.tobytes()
 
 
@@ -120,6 +143,7 @@ def wav_to_patch(wav_path: Path, out_path: Path,
     samples, src_rate = _read_wav_as_float(wav_path)
     if src_rate != target_rate:
         samples = _resample(samples, src_rate, target_rate)
+    samples = _remove_dc_offset(samples)
     samples = _apply_edge_fades(samples, target_rate)
     pcm_data = _float_to_uint8(samples)
     wav_bytes = _make_wav_bytes(pcm_data, target_rate)

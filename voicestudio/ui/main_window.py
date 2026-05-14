@@ -940,14 +940,20 @@ class MainWindow(QMainWindow):
     # ------------------------------------------------------------------
 
     def _deploy_all(self):
-        deployed, _ = self.injector.deploy_all()
+        # rebuild=True re-runs wav_to_patch on every WAV so any pipeline
+        # improvements (e.g. edge fades) apply to existing recordings,
+        # not just newly accepted ones.
+        deployed, missing, _ = self.injector.deploy_all(rebuild=True)
         summary = repackage(self.game_dir, self.cache)
         self._refresh_characters()
-        self.status_bar.showMessage(
+        msg = (
             f"Deployed {deployed} patch files + "
             f"AUDIO/RESOURCE.AUD ({summary['clips_written']} clips, "
             f"{summary['modules_written']} MAP files) to {self.game_dir}"
         )
+        if missing:
+            msg += f"   ({missing} source WAV(s) missing — those weren't rebuilt)"
+        self.status_bar.showMessage(msg)
 
     def _build_resource_aud(self):
         """Compile a RESOURCE.AUD set into a user-chosen output folder."""

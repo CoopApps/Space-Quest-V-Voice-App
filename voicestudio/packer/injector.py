@@ -62,11 +62,55 @@ class Injector:
     # Bulk deployment
     # ------------------------------------------------------------------
 
-    def deploy_all(self) -> tuple[int, int]:
+    def rebuild_from_wavs(self) -> tuple[int, int]:
         """
-        Deploy every recorded line from audiocache to game directory.
-        Returns (deployed_count, skipped_count).
+        Re-run wav_to_patch for every recorded line in the DB, overwriting
+        the audiocache patch.  Picks up any audio-pipeline improvements
+        (e.g. edge fades for click reduction) without the user having to
+        Remove + Re-Accept every recording manually.
+
+        Returns (rebuilt, missing) — `missing` counts DB rows whose WAV
+        file no longer exists on disk.
         """
+        rebuilt = missing = 0
+        try:
+            con = sqlite3.connect(self.db_path)
+            rows = con.execute(
+                "SELECT module,noun,verb,cond,seq,wav_path FROM lines "
+                "WHERE recorded=1 AND wav_path IS NOT NULL"
+            ).fetchall()
+            con.close()
+        except Exception:
+            return 0, 0
+
+        for module, noun, verb, cond, seq, wav_path in rows:
+            wav = Path(wav_path) if wav_path else None
+            if not wav or not wav.exists():
+                missing += 1
+                continue
+            aud_path = self.cache.patch_path(module, noun, verb, cond, seq)
+            aud_path.parent.mkdir(parents=True, exist_ok=True)
+            wav_to_patch(wav, aud_path)
+            self.cache.mark_dirty(module)
+            rebuilt += 1
+        return rebuilt, missing
+
+    def deploy_all(self, rebuild: bool = True) -> tuple[int, int, int]:
+        """
+        Deploy every recorded line from the audiocache to the game dir.
+
+        When `rebuild=True` (default) we re-encode every patch from its
+        source WAV first.  This guarantees clips reflect the current
+        audio pipeline (fades, resampling, etc.) — important because
+        patches in the audiocache may have been created by an older
+        version of wav_to_patch.
+
+        Returns (deployed, missing, skipped).
+        """
+        rebuilt = missing = 0
+        if rebuild:
+            rebuilt, missing = self.rebuild_from_wavs()
+
         deployed = skipped = 0
         for rec in self.cache.all_recordings():
             src = rec["path"]
@@ -76,7 +120,7 @@ class Injector:
             )
             shutil.copy2(src, dest)
             deployed += 1
-        return deployed, skipped
+        return deployed, missing, skipped
 
     def undeploy_all(self) -> int:
         """Remove all audio36 patch files from the game directory."""
