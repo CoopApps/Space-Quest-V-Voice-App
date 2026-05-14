@@ -203,6 +203,21 @@ class MainWindow(QMainWindow):
         btn_undeploy.clicked.connect(self._undeploy_all)
         tb.addWidget(btn_undeploy)
 
+        # Build a standalone RESOURCE.AUD + N.MAP set into a folder of your
+        # choice — useful for packaging a release without touching the game
+        # directory.
+        btn_build_aud = QPushButton("Build RESOURCE.AUD...")
+        btn_build_aud.setStyleSheet(
+            "font-weight:bold; background:#27ae60; color:white; padding:4px 10px;"
+        )
+        btn_build_aud.setToolTip(
+            "Compile every recorded line into a fresh AUDIO/RESOURCE.AUD + "
+            "AUDIO/<module>.MAP set in a folder you pick.\n"
+            "Drop the AUDIO/ folder into the game install (or distribute it)."
+        )
+        btn_build_aud.clicked.connect(self._build_resource_aud)
+        tb.addWidget(btn_build_aud)
+
         tb.addSeparator()
 
         # Refresh from disk (rescans recordings/ for orphan WAVs not yet in DB)
@@ -932,6 +947,38 @@ class MainWindow(QMainWindow):
             f"Deployed {deployed} patch files + "
             f"AUDIO/RESOURCE.AUD ({summary['clips_written']} clips, "
             f"{summary['modules_written']} MAP files) to {self.game_dir}"
+        )
+
+    def _build_resource_aud(self):
+        """Compile a RESOURCE.AUD set into a user-chosen output folder."""
+        target = QFileDialog.getExistingDirectory(
+            self,
+            "Pick a folder to build RESOURCE.AUD into",
+            str(self.game_dir),
+        )
+        if not target:
+            return
+        target_path = Path(target)
+        try:
+            summary = repackage(target_path, self.cache)
+        except Exception as e:
+            QMessageBox.critical(self, "Build Failed", str(e))
+            return
+
+        aud_path = target_path / "AUDIO" / "RESOURCE.AUD"
+        size_mb  = aud_path.stat().st_size / (1024 * 1024) if aud_path.exists() else 0
+        QMessageBox.information(
+            self,
+            "Build Complete",
+            f"Wrote {aud_path}\n"
+            f"  {summary['clips_written']} audio clips\n"
+            f"  {summary['modules_written']} module map files\n"
+            f"  {size_mb:.1f} MB\n\n"
+            f"Drop the AUDIO/ folder next to RESOURCE.000 in the game "
+            f"install, or distribute it as a release.",
+        )
+        self.status_bar.showMessage(
+            f"Built RESOURCE.AUD at {aud_path} ({size_mb:.1f} MB)"
         )
 
     def _undeploy_all(self):

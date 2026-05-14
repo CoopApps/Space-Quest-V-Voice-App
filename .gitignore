@@ -106,6 +106,13 @@ n024_modified.sc
 webcache.zip
 __ia_thumb*
 
+# Audio36 patch files (SCI audio resources) — never commit
+@*
+/AUDIO/
+*.001
+*.011
+*.111
+
 # Root-level launcher leftovers from the local game install
 /SQ5.BAT
 /sq5.ini
