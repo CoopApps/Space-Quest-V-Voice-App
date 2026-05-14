@@ -26,4 +26,6 @@ ENV SQ5_DATA_DIR=/data \
 
 EXPOSE 8000
 
-CMD ["uvicorn", "web.app:app", "--host", "0.0.0.0", "--port", "8000"]
+# Shell form so $PORT (set by Railway) expands at runtime. Defaults to 8000
+# for local docker-run smoke tests.
+CMD uvicorn web.app:app --host 0.0.0.0 --port ${PORT:-8000}
