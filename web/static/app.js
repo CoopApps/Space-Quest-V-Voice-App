@@ -680,13 +680,67 @@ $("#status-filter").onchange = e => {
 };
 
 // Admin token
+// Admin-token validation: ping /api/admin/stats whenever the token
+// changes (debounced ~300ms).  Updates the ✓ / ✗ pill next to the
+// input and enables the compile buttons only when the server confirms.
+let _tokenValidateTimer = null;
+
+async function validateAdminToken() {
+    const indicator = $("#admin-token-state");
+    const token = state.adminToken;
+    if (!token) {
+        indicator.className = "token-state empty";
+        indicator.title = "";
+        $("#btn-compile").disabled     = true;
+        $("#btn-compile-aud").disabled = true;
+        refreshAdminStats();   // hides the stats strip
+        return false;
+    }
+    indicator.className = "token-state checking";
+    indicator.title = "Checking…";
+    try {
+        const r = await fetch("/api/admin/stats", {
+            headers: { "X-Admin-Token": token },
+        });
+        if (r.ok) {
+            indicator.className = "token-state valid";
+            indicator.title = "Token accepted — admin actions enabled";
+            $("#btn-compile").disabled     = false;
+            $("#btn-compile-aud").disabled = false;
+            setStatus("Admin token accepted.");
+            refreshAdminStats();
+            if (state.detail) renderDetail();
+            return true;
+        }
+        indicator.className = "token-state invalid";
+        indicator.title = `Server rejected token (HTTP ${r.status})`;
+        $("#btn-compile").disabled     = true;
+        $("#btn-compile-aud").disabled = true;
+        setStatus(r.status === 401
+            ? "Admin token rejected. Check the value in Railway's variables."
+            : `Admin check failed (HTTP ${r.status}).`);
+        return false;
+    } catch (e) {
+        indicator.className = "token-state invalid";
+        indicator.title = "Network error during admin check";
+        $("#btn-compile").disabled     = true;
+        $("#btn-compile-aud").disabled = true;
+        setStatus("Admin check failed: " + e.message);
+        return false;
+    }
+}
+
 $("#admin-token").oninput = e => {
     state.adminToken = e.target.value.trim();
     localStorage.setItem("sq5_admin_token", state.adminToken);
-    $("#btn-compile").disabled     = !state.adminToken;
-    $("#btn-compile-aud").disabled = !state.adminToken;
-    if (state.detail) renderDetail();
+    clearTimeout(_tokenValidateTimer);
+    _tokenValidateTimer = setTimeout(validateAdminToken, 300);
 };
+
+// Also validate on initial load if a token was already stored.
+if (state.adminToken) {
+    validateAdminToken();
+}
 $("#btn-compile").disabled     = !state.adminToken;
 $("#btn-compile-aud").disabled = !state.adminToken;
 
@@ -745,12 +799,9 @@ async function refreshAdminStats() {
     }
 }
 
-// Patch admin-token input + refreshAll to also pull admin stats.
-const _origAdminInput = $("#admin-token").oninput;
-$("#admin-token").oninput = e => {
-    _origAdminInput(e);
-    refreshAdminStats();
-};
+// refreshAll also pulls admin stats so the header strip stays in sync
+// after deploys / picks / deletes.  (The admin-token input has its own
+// validation/refresh path above — no separate wrapper needed.)
 const _origRefreshAll = refreshAll;
 refreshAll = function () {
     return Promise.all([_origRefreshAll(), refreshAdminStats()]);
