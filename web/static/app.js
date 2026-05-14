@@ -252,10 +252,14 @@ function renderDetail() {
         <div class="dropzone" id="dropzone">
             <label>
                 <input type="file" id="file-input" accept=".wav,.mp3,.flac,.ogg,.m4a,.aac,.aiff,.aif">
-                <span>📂 Drop an audio file here, or click to pick one
+                <span id="dropzone-text">📂 Drop an audio file here, or click to pick one
                        (WAV, MP3, FLAC, OGG, M4A, AAC, AIFF)</span>
             </label>
         </div>
+
+        <canvas id="pending-waveform" class="pending-waveform hidden"
+                width="600" height="60"></canvas>
+        <div id="pending-info" class="pending-info hidden"></div>
 
         <div class="controls">
             <button id="btn-record" class="record">● Record</button>
@@ -364,7 +368,101 @@ async function acceptFile(file) {
     if (prev)   prev.disabled   = false;
     if (submit) submit.disabled = false;
     if (cancel) cancel.disabled = false;
+    showPendingAudio(file, file.name);
     setStatus(`Loaded ${file.name} — click ✓ Submit to upload.`);
+}
+
+// ---------------------------------------------------------------------------
+// Pending-audio visualizer
+// ---------------------------------------------------------------------------
+
+async function showPendingAudio(blob, displayName) {
+    const dz       = $("#dropzone");
+    const dzText   = $("#dropzone-text");
+    const canvas   = $("#pending-waveform");
+    const info     = $("#pending-info");
+    if (!dz) return;
+
+    // Update the dropzone so it visibly confirms a file is staged.
+    dz.classList.add("loaded");
+    const sizeKb = (blob.size / 1024).toFixed(0);
+    if (dzText) {
+        dzText.innerHTML = `✓ <b>${escapeHtml(displayName)}</b> &nbsp; ${sizeKb} KB &nbsp;
+                            <span style="opacity:.6">— click ✓ Submit to upload</span>`;
+    }
+
+    // Decode and draw a waveform.  Uses the same OfflineAudio path
+    // blobToWav uses, but here we keep it visual only.
+    try {
+        const buf = await blob.arrayBuffer();
+        const ctx = new (window.AudioContext || window.webkitAudioContext)();
+        const dec = await ctx.decodeAudioData(buf.slice(0));   // slice = copy
+        ctx.close();
+
+        // Match canvas internal pixel buffer to its on-screen size so the
+        // waveform is crisp at any panel width.
+        const dpr = window.devicePixelRatio || 1;
+        const rect = canvas.getBoundingClientRect();
+        canvas.width  = Math.max(200, Math.round(rect.width  * dpr));
+        canvas.height = Math.round(60 * dpr);
+
+        // Build a peak-envelope array sized to canvas width.
+        const cw = canvas.width, ch = canvas.height;
+        const samples = dec.getChannelData(0);
+        const bucket  = Math.max(1, Math.floor(samples.length / cw));
+        const peaks   = new Float32Array(cw);
+        for (let x = 0; x < cw; x++) {
+            let max = 0;
+            const start = x * bucket;
+            const end   = Math.min(samples.length, start + bucket);
+            for (let i = start; i < end; i++) {
+                const v = Math.abs(samples[i]);
+                if (v > max) max = v;
+            }
+            peaks[x] = max;
+        }
+
+        const c = canvas.getContext("2d");
+        c.fillStyle   = "#181825";
+        c.fillRect(0, 0, cw, ch);
+        c.strokeStyle = "#89b4fa";
+        c.lineWidth   = 1;
+        c.beginPath();
+        const mid = ch / 2;
+        for (let x = 0; x < cw; x++) {
+            const h = peaks[x] * (mid - 2);
+            c.moveTo(x + 0.5, mid - h);
+            c.lineTo(x + 0.5, mid + h);
+        }
+        c.stroke();
+        canvas.classList.remove("hidden");
+
+        if (info) {
+            info.textContent = `${dec.duration.toFixed(2)}s · ${dec.sampleRate} Hz · ` +
+                               `${dec.numberOfChannels === 1 ? "mono" : "stereo"}`;
+            info.classList.remove("hidden");
+        }
+    } catch (e) {
+        // Some uploads (e.g. raw .wav that the browser can't decode for
+        // preview) will hit this — that's fine, the upload still works.
+        canvas.classList.add("hidden");
+        if (info) {
+            info.textContent = `Cannot preview in browser (${e.message}). Submit will still work.`;
+            info.classList.remove("hidden");
+        }
+    }
+}
+
+function clearPendingAudio() {
+    const dz     = $("#dropzone");
+    const dzText = $("#dropzone-text");
+    const canvas = $("#pending-waveform");
+    const info   = $("#pending-info");
+    if (dz)     dz.classList.remove("loaded");
+    if (dzText) dzText.textContent = "📂 Drop an audio file here, or click to pick one " +
+                                     "(WAV, MP3, FLAC, OGG, M4A, AAC, AIFF)";
+    if (canvas) canvas.classList.add("hidden");
+    if (info)   info.classList.add("hidden");
 }
 
 // ---------------------------------------------------------------------------
@@ -401,6 +499,7 @@ function wireRecord() {
             rec.classList.remove("recording");
             rec.textContent = "● Record again";
             prev.disabled = false; submit.disabled = false; cancel.disabled = false;
+            showPendingAudio(state.recordedBlob, "(browser recording)");
             setStatus(`Recorded ${(state.recordedBlob.size/1024).toFixed(0)} KB.`);
         };
         state.mediaRecorder = mr;
@@ -425,6 +524,7 @@ function wireRecord() {
         state.recordedFilename = null;
         rec.textContent = "● Record";
         prev.disabled = submit.disabled = cancel.disabled = true;
+        clearPendingAudio();
         setStatus("Discarded.");
     };
 
@@ -458,6 +558,7 @@ function wireRecord() {
         state.recordedFilename = null;
         rec.textContent = "● Record";
         prev.disabled = submit.disabled = cancel.disabled = true;
+        clearPendingAudio();
     };
 }
 
@@ -510,13 +611,28 @@ async function blobToWav(blob) {
 
 async function submitBlob(blob, filename) {
     if (!state.activeLineKey) return;
+    setStatus(`Uploading ${filename} (${(blob.size/1024).toFixed(0)} KB)…`);
     const fd = new FormData();
     fd.append("audio", blob, filename);
     fd.append("contributor", state.contributorName || "anonymous");
     try {
-        await api.post(`/api/lines/${state.activeLineKey}/upload`, fd, true);
-        setStatus(`Uploaded ${filename}.`);
+        const result = await api.post(
+            `/api/lines/${state.activeLineKey}/upload`, fd, true);
+        setStatus(
+            `✓ Uploaded ${filename}` +
+            (result.duration_sec ? ` (${result.duration_sec.toFixed(1)}s)` : "") +
+            ` as "${state.contributorName || "anonymous"}".`
+        );
+        // Re-render the detail panel with the new contribution and flash
+        // the row for it so the user can see what just landed.
         await openLine(state.activeLineKey);
+        const el = document.querySelector(
+            `#contributions .contrib[data-id="${result.id}"]`);
+        if (el) {
+            el.classList.add("just-added");
+            el.scrollIntoView({ block: "nearest", behavior: "smooth" });
+            setTimeout(() => el.classList.remove("just-added"), 1700);
+        }
         refreshAll();
     } catch (e) {
         setStatus("Upload failed: " + e.message);
