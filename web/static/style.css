@@ -43,6 +43,43 @@ header h1 .sub { color: var(--muted); font-size: 12px; font-weight: 400; margin-
 .overall-progress progress { width: 220px; height: 12px; }
 #overall-counts { color: var(--muted); font-size: 12px; }
 
+.contributor-area {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    margin: 0 16px 0 auto;
+    padding: 4px 10px;
+    background: var(--bg-3);
+    border: 1px solid var(--line);
+    border-radius: 6px;
+}
+.contributor-area label {
+    color: var(--muted);
+    font-size: 12px;
+    white-space: nowrap;
+}
+.contributor-area input {
+    background: transparent;
+    border: none;
+    color: var(--text);
+    font: inherit;
+    font-size: 13px;
+    padding: 2px 4px;
+    width: 160px;
+    outline: none;
+}
+.contributor-area input:focus {
+    background: rgba(137, 180, 250, 0.08);
+    border-radius: 3px;
+}
+.saved-hint {
+    color: var(--good);
+    font-size: 11px;
+    opacity: 0;
+    transition: opacity 0.3s;
+}
+.saved-hint:not(.hidden) { opacity: 1; }
+
 main {
     flex: 1 1 auto;
     display: grid;

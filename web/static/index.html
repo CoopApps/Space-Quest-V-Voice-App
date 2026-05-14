@@ -10,6 +10,12 @@
 
 <header>
   <h1>SQ5 Voice Studio <span class="sub">community recordings</span></h1>
+  <div class="contributor-area">
+    <label for="global-contributor">Submitting as:</label>
+    <input id="global-contributor" placeholder="your name (optional)"
+           autocomplete="name" maxlength="60">
+    <span id="contributor-saved" class="saved-hint hidden">✓ saved</span>
+  </div>
   <div class="overall-progress">
     <span id="overall-counts">loading…</span>
     <progress id="overall-bar" max="100" value="0"></progress>

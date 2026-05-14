@@ -22,6 +22,24 @@ const state = {
 
 $("#admin-token").value = state.adminToken;
 
+// Header contributor name input — persistent, used for every upload.
+const $contrib = $("#global-contributor");
+const $saved   = $("#contributor-saved");
+$contrib.value = state.contributorName;
+
+let _savedHintTimer = null;
+$contrib.addEventListener("input", e => {
+    state.contributorName = e.target.value;
+    localStorage.setItem("sq5_contributor", state.contributorName);
+    // Reflect to the in-detail input if one is rendered, so both stay in sync.
+    const inner = document.getElementById("contributor-name");
+    if (inner) inner.value = state.contributorName;
+    // Pulse a "saved" hint so the user knows their name persists.
+    $saved.classList.remove("hidden");
+    clearTimeout(_savedHintTimer);
+    _savedHintTimer = setTimeout(() => $saved.classList.add("hidden"), 1200);
+});
+
 // ---------------------------------------------------------------------------
 // API
 // ---------------------------------------------------------------------------
@@ -229,11 +247,6 @@ function renderDetail() {
 
         <div class="text-box" id="line-text">${escapeHtml(line.text)}</div>
 
-        <div class="contrib-name-row">
-            <input id="contributor-name" placeholder="Your name (optional)"
-                   value="${escapeHtml(state.contributorName)}">
-        </div>
-
         <div class="dropzone" id="dropzone">
             <label>
                 <input type="file" id="file-input" accept=".wav,.mp3,.flac,.ogg,.m4a,.aac,.aiff,.aif">
@@ -261,10 +274,6 @@ function renderDetail() {
     $("#btn-copy").onclick = () => {
         navigator.clipboard.writeText(line.text);
         setStatus("Line text copied to clipboard.");
-    };
-    $("#contributor-name").oninput = e => {
-        state.contributorName = e.target.value;
-        localStorage.setItem("sq5_contributor", state.contributorName);
     };
 
     wireDropzone();
