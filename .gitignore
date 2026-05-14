@@ -1,0 +1,151 @@
+# =========================================================================
+# Repository scope: ONLY the SQ5 Voice App (web/ + voicestudio/ + DB).
+# Everything else in the working directory is local-only and excluded.
+# =========================================================================
+
+# --- Top-level allowlist via explicit ignore of everything we don't want -
+# Start by excluding all files at the root, then re-include the few that
+# really belong.  This is the safest approach since the working directory
+# is a messy local workspace.
+
+# Game / GOG installer cruft
+*.exe
+*.dat
+*.ico
+*.bmp
+*.png
+*.jpg
+*.jpeg
+*.gif
+*.tif
+*.pdf
+*.htm
+*.html
+*.lnk
+*.zip
+*.torrent
+*.xml
+*.sqlite
+*.hashdb
+*.script
+*.info
+*.HLP
+*.INF
+*.MAP
+*.CFG
+*.TXT
+*.cfg
+EULA.txt
+README
+readme.txt
+license.txt
+VERSION
+manual*
+customer_support*
+goggame-*
+unins*
+support*
+gog*
+SQ5.zip
+sq-5_*
+
+# Game resource archives + decompile outputs
+*.aud
+*.AUD
+*.v56
+*.V56
+*.p56
+*.P56
+*.scr
+*.SCR
+*.hep
+*.HEP
+*.msg
+*.MSG
+*.fon
+*.FON
+*.sco
+*.tex
+*.TEX
+*.000
+*.DRV
+*.drv
+resource.000
+resource.map
+resource.sfx
+RESOURCE.*
+INTERP.ERR
+SIERRA.EXE
+LANGUAGE.*
+UTILITY.EXE
+65535.MAP
+MESSAGE.MAP
+
+# Working subdirectories from the rest of this workspace
+sq4/
+sq5/
+sq4dis/
+sqdis/
+dagger/
+dagdis/
+pharkas/
+fpdis/
+Freddy*Pharkas*/
+scummvm/
+saves/
+patch_stash/
+SCICompanion-repo/
+web/data/contributions/
+
+# Hand-test scripts and patch experiments
+patch_*.py
+test_*.py
+*_modified.sc
+24_modified.sc
+n024_modified.sc
+webcache.zip
+__ia_thumb*
+
+# Root-level launcher leftovers from the local game install
+/SQ5.BAT
+/sq5.ini
+/*.BAT
+/*.ini
+
+# --- Re-include what we DO want ------------------------------------------
+!.gitignore
+!web/
+!web/**
+!voicestudio/
+!voicestudio/**
+!voicestudio/sq5_lines.db
+!README.md
+
+# --- Voicestudio runtime data (user-local, not source) -------------------
+voicestudio/audiocache/
+voicestudio/recordings/
+voicestudio/test_decoded.wav
+voicestudio/__pycache__/
+voicestudio/**/__pycache__/
+
+# --- Web app runtime (lives on the Railway volume) -----------------------
+web/__pycache__/
+web/data/contributions/
+web/data/*.db
+web/data/*.db-journal
+
+# --- Python --------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+.env
+.env.local
+
+# --- Editor / OS ---------------------------------------------------------
+.claude/
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

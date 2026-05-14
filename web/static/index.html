@@ -1,0 +1,61 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>SQ5 Voice Studio — Community</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header>
+  <h1>SQ5 Voice Studio <span class="sub">community recordings</span></h1>
+  <div class="overall-progress">
+    <span id="overall-counts">loading…</span>
+    <progress id="overall-bar" max="100" value="0"></progress>
+  </div>
+</header>
+
+<main>
+  <aside class="sidebar">
+    <div class="tabs">
+      <button class="tab active" data-tab="characters">Characters</button>
+      <button class="tab"        data-tab="rooms">Rooms</button>
+    </div>
+
+    <input id="sidebar-filter" class="sidebar-filter" placeholder="Filter…">
+
+    <ul id="characters" class="browser-list"></ul>
+    <ul id="rooms"      class="browser-list hidden"></ul>
+  </aside>
+
+  <section class="lines">
+    <div class="search-row">
+      <input id="search" placeholder="Search every line by text…">
+      <select id="status-filter">
+        <option value="all">All lines</option>
+        <option value="missing">No recording</option>
+        <option value="contributed">Has contributions</option>
+        <option value="selected">Selected</option>
+      </select>
+    </div>
+    <div id="line-list" class="line-list"></div>
+    <div id="line-list-empty" class="empty hidden">No lines.</div>
+  </section>
+
+  <section id="detail" class="detail">
+    <p class="empty">Select a line on the left.</p>
+  </section>
+</main>
+
+<footer>
+  <div id="status-bar">Ready</div>
+  <div class="admin-area">
+    <input id="admin-token" type="password" placeholder="Admin token (optional)">
+    <button id="btn-compile" disabled>Compile &amp; Download Patches</button>
+  </div>
+</footer>
+
+<script src="/app.js"></script>
+</body>
+</html>
