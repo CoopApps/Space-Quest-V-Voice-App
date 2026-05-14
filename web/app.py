@@ -235,16 +235,51 @@ def line_detail(key: str):
 # Upload
 # ---------------------------------------------------------------------------
 
+@app.get("/api/contributors/check")
+def check_contributor(name: str, token: str = ""):
+    """
+    Tell the client whether a contributor name is available for them
+    to use.  Returns one of:
+        {"status": "free"}     — name not yet claimed
+        {"status": "yours"}    — claimed and the token matches
+        {"status": "taken"}    — claimed by someone else (different token)
+    """
+    name = (name or "").strip()
+    if not name:
+        return {"status": "free"}
+    with open_db(DB_PATH) as con:
+        row = con.execute(
+            "SELECT token FROM contributors WHERE name=? COLLATE NOCASE",
+            (name,),
+        ).fetchone()
+    if not row:
+        return {"status": "free"}
+    if row["token"] == (token or ""):
+        return {"status": "yours"}
+    return {"status": "taken"}
+
+
 @app.post("/api/lines/{key}/upload")
 async def upload_contribution(
     key: str,
     audio: UploadFile = File(...),
-    contributor: str = Form("anonymous"),
-    note: str | None = Form(None),
+    contributor:       str = Form(...),
+    contributor_token: str = Form(...),
+    note: str | None   = Form(None),
 ):
     module, noun, verb, cond, seq = parse_line_key(key)
 
-    # Validate line exists.
+    # Name is required; trim whitespace and reject empties.
+    contributor = (contributor or "").strip()
+    contributor_token = (contributor_token or "").strip()
+    if not contributor:
+        raise HTTPException(400, "A contributor name is required.")
+    if contributor.lower() == "anonymous":
+        raise HTTPException(400, "Pick a real name; 'anonymous' is not allowed.")
+    if not contributor_token:
+        raise HTTPException(400, "Missing contributor token. Reload the page.")
+
+    # Validate line exists, and claim / verify the contributor name.
     with open_db(DB_PATH) as con:
         exists = con.execute(
             "SELECT 1 FROM lines WHERE module=? AND noun=? AND verb=? "
@@ -253,6 +288,25 @@ async def upload_contribution(
         ).fetchone()
         if not exists:
             raise HTTPException(404, "Line not found")
+
+        # If the name is already claimed, the token must match.  Otherwise
+        # register this token as the owner of the name.
+        row = con.execute(
+            "SELECT token FROM contributors WHERE name=? COLLATE NOCASE",
+            (contributor,),
+        ).fetchone()
+        if row:
+            if row["token"] != contributor_token:
+                raise HTTPException(
+                    409,
+                    f"The name '{contributor}' is already in use by someone "
+                    "else.  Pick a different name.",
+                )
+        else:
+            con.execute(
+                "INSERT INTO contributors (name, token) VALUES (?, ?)",
+                (contributor, contributor_token),
+            )
 
     # Read upload, size-check.
     raw = await audio.read()
@@ -371,14 +425,34 @@ def admin_stats():
 
 @app.post("/api/admin/select/{contribution_id}", dependencies=[Depends(require_admin)])
 def admin_select(contribution_id: int):
+    """
+    Mark this contribution canonical, and cascade: every other
+    contribution by the same contributor for the same character (talker)
+    also becomes canonical on its line (replacing any prior pick).
+
+    Rationale — once we've decided "this voice IS the character", every
+    line that contributor recorded for that character should win by
+    default.  The admin can still override individually after the cascade.
+    """
     with open_db(DB_PATH) as con:
         row = con.execute(
-            "SELECT module,noun,verb,cond,seq FROM contributions WHERE id=?",
+            "SELECT module, noun, verb, cond, seq, contributor "
+            "FROM contributions WHERE id=?",
             (contribution_id,),
         ).fetchone()
         if not row:
             raise HTTPException(404, "Contribution not found")
-        # Clear any other selection for this line, then mark this one.
+
+        # Resolve the line → talker_id so we know which character we're
+        # cascading across.
+        line = con.execute(
+            "SELECT talker_id FROM lines WHERE module=? AND noun=? "
+            "AND verb=? AND cond=? AND seq=?",
+            (row["module"], row["noun"], row["verb"], row["cond"], row["seq"]),
+        ).fetchone()
+        talker_id = line["talker_id"] if line else None
+
+        # Step 1 — clear current selection on THIS line, then mark our pick.
         con.execute(
             "UPDATE contributions SET selected=0 "
             "WHERE module=? AND noun=? AND verb=? AND cond=? AND seq=?",
@@ -388,7 +462,42 @@ def admin_select(contribution_id: int):
             "UPDATE contributions SET selected=1 WHERE id=?",
             (contribution_id,),
         )
-    return {"ok": True}
+        cascaded_lines = 1
+
+        # Step 2 — cascade across other lines for the same talker.
+        if talker_id is not None and row["contributor"]:
+            # Every other contribution by this person on a line belonging
+            # to the same character.
+            siblings = con.execute("""
+                SELECT c.id, c.module, c.noun, c.verb, c.cond, c.seq
+                FROM contributions c
+                JOIN lines l USING (module, noun, verb, cond, seq)
+                WHERE c.contributor=? COLLATE NOCASE
+                  AND l.talker_id=?
+                  AND c.id != ?
+            """, (row["contributor"], talker_id, contribution_id)).fetchall()
+
+            promoted_line_keys = set()
+            for s in siblings:
+                lk = (s["module"], s["noun"], s["verb"], s["cond"], s["seq"])
+                # Only one canonical per line — if we've already promoted
+                # one sibling for this line in this pass, skip subsequent
+                # ones (the user has multiple takes on the same line).
+                if lk in promoted_line_keys:
+                    continue
+                con.execute(
+                    "UPDATE contributions SET selected=0 "
+                    "WHERE module=? AND noun=? AND verb=? AND cond=? AND seq=?",
+                    lk,
+                )
+                con.execute(
+                    "UPDATE contributions SET selected=1 WHERE id=?",
+                    (s["id"],),
+                )
+                promoted_line_keys.add(lk)
+                cascaded_lines += 1
+
+    return {"ok": True, "cascaded_lines": cascaded_lines}
 
 
 @app.post("/api/admin/clear/{key}", dependencies=[Depends(require_admin)])

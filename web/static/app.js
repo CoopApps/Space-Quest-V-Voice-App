@@ -18,27 +18,103 @@ const state = {
     mediaRecorder: null,
     recordedBlob:  null,
     recordedFilename: null,
+    // Per-browser token for claiming a contributor name.  Anyone who
+    // re-opens the site in the same browser keeps their identity; if
+    // someone else tries to submit under the same name from a different
+    // browser, the server rejects them with HTTP 409.
+    contributorToken: (() => {
+        let t = localStorage.getItem("sq5_contributor_token");
+        if (!t) {
+            t = (crypto.randomUUID ? crypto.randomUUID()
+                                   : String(Math.random()).slice(2) + Date.now());
+            localStorage.setItem("sq5_contributor_token", t);
+        }
+        return t;
+    })(),
+    // Result of the latest availability check.
+    contributorNameStatus: "empty",   // empty | checking | free | yours | taken
 };
 
 $("#admin-token").value = state.adminToken;
 
-// Header contributor name input — persistent, used for every upload.
+// Header contributor name input — persistent, validated against the
+// server so the user knows whether the name is free / theirs / taken.
 const $contrib = $("#global-contributor");
-const $saved   = $("#contributor-saved");
+const $nameSt  = $("#contributor-state");
 $contrib.value = state.contributorName;
 
-let _savedHintTimer = null;
+function setNameStatus(status, title = "") {
+    state.contributorNameStatus = status;
+    if (!$nameSt) return;
+    $nameSt.className = "name-state " + status;
+    $nameSt.title     = title;
+    // Re-evaluate the Submit button if a line is currently open.
+    refreshSubmitEnabled();
+}
+
+let _nameCheckTimer = null;
+async function checkNameAvailability() {
+    const name = (state.contributorName || "").trim();
+    if (!name) {
+        setNameStatus("empty",
+            "A name is required before submitting. Type one to claim it.");
+        return;
+    }
+    setNameStatus("checking", "Checking availability…");
+    try {
+        const r = await fetch("/api/contributors/check?" + new URLSearchParams({
+            name, token: state.contributorToken,
+        }));
+        if (!r.ok) throw new Error(`HTTP ${r.status}`);
+        const data = await r.json();
+        if (data.status === "yours") {
+            setNameStatus("yours",
+                "This name is registered to this browser — submissions go out under it.");
+        } else if (data.status === "free") {
+            setNameStatus("free",
+                "Available — first submission will claim this name for you.");
+        } else if (data.status === "taken") {
+            setNameStatus("taken",
+                "Already in use by someone else.  Pick a different name.");
+        } else {
+            setNameStatus("empty");
+        }
+    } catch (e) {
+        setNameStatus("empty", "Couldn't reach server: " + e.message);
+    }
+}
+
 $contrib.addEventListener("input", e => {
     state.contributorName = e.target.value;
     localStorage.setItem("sq5_contributor", state.contributorName);
-    // Reflect to the in-detail input if one is rendered, so both stay in sync.
-    const inner = document.getElementById("contributor-name");
-    if (inner) inner.value = state.contributorName;
-    // Pulse a "saved" hint so the user knows their name persists.
-    $saved.classList.remove("hidden");
-    clearTimeout(_savedHintTimer);
-    _savedHintTimer = setTimeout(() => $saved.classList.add("hidden"), 1200);
+    clearTimeout(_nameCheckTimer);
+    _nameCheckTimer = setTimeout(checkNameAvailability, 350);
 });
+
+// Initial check on load (covers returning visitors with a stored name).
+checkNameAvailability();
+
+/**
+ * Returns true when the user is allowed to submit a recording right
+ * now: they have audio staged, an active line, and a valid name
+ * (either available or already claimed by them).
+ */
+function canSubmitNow() {
+    if (!state.recordedBlob || !state.activeLineKey) return false;
+    return state.contributorNameStatus === "free"
+        || state.contributorNameStatus === "yours";
+}
+
+function refreshSubmitEnabled() {
+    const submit = document.getElementById("btn-submit");
+    if (!submit) return;
+    submit.disabled = !canSubmitNow();
+    submit.title = canSubmitNow()
+        ? "Submit this recording"
+        : (!state.recordedBlob
+            ? "Stage a recording or file first"
+            : "Enter a valid name above before submitting");
+}
 
 // ---------------------------------------------------------------------------
 // API
@@ -321,8 +397,11 @@ function wireContributions(adminEnabled) {
                 const act = btn.dataset.act;
                 try {
                     if (act === "select") {
-                        await api.post(`/api/admin/select/${id}`, undefined, false, true);
-                        setStatus("Marked as canonical.");
+                        const r = await api.post(`/api/admin/select/${id}`, undefined, false, true);
+                        const n = (r && r.cascaded_lines) || 1;
+                        setStatus(n > 1
+                            ? `Picked as canonical. Cascaded to ${n} of this contributor's lines for this character.`
+                            : "Picked as canonical.");
                     } else if (act === "delete") {
                         if (!confirm("Delete this contribution permanently?")) return;
                         await api.del(`/api/admin/contributions/${id}`, true);
@@ -362,14 +441,18 @@ async function acceptFile(file) {
     state.recordedFilename = file.name;
     const rec    = $("#btn-record");
     const prev   = $("#btn-preview");
-    const submit = $("#btn-submit");
     const cancel = $("#btn-cancel");
     if (rec) rec.textContent = "● Record";
     if (prev)   prev.disabled   = false;
-    if (submit) submit.disabled = false;
     if (cancel) cancel.disabled = false;
+    refreshSubmitEnabled();   // submit enables only if name is OK
     showPendingAudio(file, file.name);
-    setStatus(`Loaded ${file.name} — click ✓ Submit to upload.`);
+    if (!canSubmitNow() && state.contributorNameStatus !== "yours" &&
+        state.contributorNameStatus !== "free") {
+        setStatus(`Loaded ${file.name} — set a name in the header to submit.`);
+    } else {
+        setStatus(`Loaded ${file.name} — click ✓ Submit to upload.`);
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -498,7 +581,8 @@ function wireRecord() {
             state.isRecording = false;
             rec.classList.remove("recording");
             rec.textContent = "● Record again";
-            prev.disabled = false; submit.disabled = false; cancel.disabled = false;
+            prev.disabled = cancel.disabled = false;
+            refreshSubmitEnabled();
             showPendingAudio(state.recordedBlob, "(browser recording)");
             setStatus(`Recorded ${(state.recordedBlob.size/1024).toFixed(0)} KB.`);
         };
@@ -611,10 +695,15 @@ async function blobToWav(blob) {
 
 async function submitBlob(blob, filename) {
     if (!state.activeLineKey) return;
+    if (!canSubmitNow()) {
+        setStatus("Set a valid name before submitting (see the header field).");
+        return;
+    }
     setStatus(`Uploading ${filename} (${(blob.size/1024).toFixed(0)} KB)…`);
     const fd = new FormData();
     fd.append("audio", blob, filename);
-    fd.append("contributor", state.contributorName || "anonymous");
+    fd.append("contributor",       state.contributorName.trim());
+    fd.append("contributor_token", state.contributorToken);
     try {
         const result = await api.post(
             `/api/lines/${state.activeLineKey}/upload`, fd, true);
@@ -852,8 +941,11 @@ document.addEventListener("keydown", async (e) => {
         if (idx >= contribs.length) return;
         const id = parseInt(contribs[idx].dataset.id, 10);
         try {
-            await api.post(`/api/admin/select/${id}`, undefined, false, true);
-            setStatus(`Picked contribution #${idx + 1} as canonical.`);
+            const r = await api.post(`/api/admin/select/${id}`, undefined, false, true);
+            const n = (r && r.cascaded_lines) || 1;
+            setStatus(n > 1
+                ? `Picked contribution #${idx + 1} as canonical. Cascaded to ${n} lines.`
+                : `Picked contribution #${idx + 1} as canonical.`);
             if (state.activeLineKey) await openLine(state.activeLineKey);
             refreshAll();
         } catch (err) { setStatus(err.message); }

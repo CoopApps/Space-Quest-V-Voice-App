@@ -43,6 +43,16 @@ CREATE INDEX IF NOT EXISTS idx_contrib_line
 
 CREATE INDEX IF NOT EXISTS idx_contrib_selected
     ON contributions (module, noun, verb, cond, seq, selected);
+
+-- Claimed contributor names.  First person to submit under a given
+-- name registers their browser-side UUID against it; future uploads
+-- under that name must present the same UUID, so a different visitor
+-- can't impersonate them.  Lookup is case-insensitive via NOCASE.
+CREATE TABLE IF NOT EXISTS contributors (
+    name        TEXT PRIMARY KEY COLLATE NOCASE,
+    token       TEXT NOT NULL,
+    claimed_at  TEXT NOT NULL DEFAULT (datetime('now'))
+);
 """
 
 
