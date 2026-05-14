@@ -21,12 +21,13 @@ from pathlib import Path
 
 import numpy as np
 
-SCI_SAMPLE_RATE  = 22050   # Matches the SQ5 voice mod's RESOURCE.AUD.
-                           # The SB driver locks playback rate to the
-                           # first clip played in a session — if our
-                           # clip is at 11025 but the mod's at 22050,
-                           # ours plays at 2x speed once the mod has
-                           # spoken once.  Matching avoids that entirely.
+SCI_SAMPLE_RATE  = 11025   # The mod's SOL clips have rate=22050 with the
+                           # DPCM compressed flag (0x08) set, which the
+                           # engine decodes to 11025 Hz at playback.  Our
+                           # uncompressed RIFF-WAV patches must be at
+                           # 11025 to match the driver's actual output
+                           # rate (the 22050 in the mod's header is the
+                           # COMPRESSED rate, not the playback rate).
 PATCH_PREAMBLE   = bytes([0x8D, 0x00])   # SOL ID + shift=0
 
 # For ADPCM decode of existing SOL files (optional, decoder only)
