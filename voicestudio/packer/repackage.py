@@ -44,12 +44,6 @@ def _make_sol_clip(pcm_bytes: bytes, sample_rate: int = SCI_SAMPLE_RATE) -> byte
     Wrap raw 8-bit unsigned PCM bytes in a SOL header.
     Returns the complete SOL clip (header + data).
     """
-    header = struct.pack(
-        "<BBHBI",       # BB=id+shift, H=rate, B=flags, I=data_size
-        SOL_ID,
-        SOL_SHIFT,
-    ) + SOL_MAGIC + struct.pack("<HBI", sample_rate, 0x00, len(pcm_bytes))
-    # struct above is split; let's do it properly:
     header = (
         bytes([SOL_ID, SOL_SHIFT])
         + SOL_MAGIC
