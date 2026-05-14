@@ -17,6 +17,7 @@ const state = {
     isRecording:   false,
     mediaRecorder: null,
     recordedBlob:  null,
+    recordedFilename: null,
 };
 
 $("#admin-token").value = state.adminToken;
@@ -337,8 +338,21 @@ function wireDropzone() {
 }
 
 async function acceptFile(file) {
-    setStatus(`Uploading ${file.name}…`);
-    await submitBlob(file, file.name);
+    // Stage the file the same way browser recordings stage: load it
+    // into state.recordedBlob, enable Preview/Submit, and let the user
+    // confirm before we upload it.  Keeps the UX consistent across
+    // upload-from-file and record-in-browser.
+    state.recordedBlob = file;
+    state.recordedFilename = file.name;
+    const rec    = $("#btn-record");
+    const prev   = $("#btn-preview");
+    const submit = $("#btn-submit");
+    const cancel = $("#btn-cancel");
+    if (rec) rec.textContent = "● Record";
+    if (prev)   prev.disabled   = false;
+    if (submit) submit.disabled = false;
+    if (cancel) cancel.disabled = false;
+    setStatus(`Loaded ${file.name} — click ✓ Submit to upload.`);
 }
 
 // ---------------------------------------------------------------------------
@@ -388,39 +402,48 @@ function wireRecord() {
 
     prev.onclick = () => {
         if (!state.recordedBlob) return;
-        const a = new Audio(URL.createObjectURL(state.recordedBlob));
-        a.play();
+        const url = URL.createObjectURL(state.recordedBlob);
+        const a = new Audio(url);
+        a.onended = a.onerror = () => URL.revokeObjectURL(url);
+        a.play().catch(e => setStatus("Preview failed: " + e.message));
     };
 
     cancel.onclick = () => {
         state.recordedBlob = null;
+        state.recordedFilename = null;
         rec.textContent = "● Record";
         prev.disabled = submit.disabled = cancel.disabled = true;
-        setStatus("Recording discarded.");
+        setStatus("Discarded.");
     };
 
     submit.onclick = async () => {
         if (!state.recordedBlob) return;
-        const ext = (state.recordedBlob.type.includes("webm")) ? "webm"
-                  : (state.recordedBlob.type.includes("ogg"))  ? "ogg"
-                  : "wav";  // best guess
-        // The server's loader only supports a known list, and webm isn't on
-        // it.  Convert webm/opus → WAV in the browser via OfflineAudioContext
-        // so the upload is always a format the backend accepts.
-        let blob = state.recordedBlob;
-        let filename = `recording.${ext}`;
-        if (ext === "webm" || ext === "ogg") {
-            try {
-                const wav = await blobToWav(state.recordedBlob);
-                blob = wav;
-                filename = "recording.wav";
-            } catch (e) {
-                setStatus("In-browser WAV conversion failed: " + e.message);
-                return;
+
+        // If the staged blob came from a real File (drag-drop / picker)
+        // we have its original filename and can upload it as-is — the
+        // server's loader handles WAV/MP3/FLAC/OGG/M4A/AAC/AIFF.
+        // If it's a MediaRecorder blob (no File), it'll be webm/opus
+        // which the backend can't decode, so transcode to WAV first.
+        let blob     = state.recordedBlob;
+        let filename = state.recordedFilename;
+
+        const isUploadedFile = (blob instanceof File);
+        if (!isUploadedFile) {
+            const isWebmOrOgg = blob.type.includes("webm") || blob.type.includes("ogg");
+            if (isWebmOrOgg) {
+                try {
+                    blob = await blobToWav(state.recordedBlob);
+                } catch (e) {
+                    setStatus("In-browser WAV conversion failed: " + e.message);
+                    return;
+                }
             }
+            filename = "recording.wav";
         }
+
         await submitBlob(blob, filename);
         state.recordedBlob = null;
+        state.recordedFilename = null;
         rec.textContent = "● Record";
         prev.disabled = submit.disabled = cancel.disabled = true;
     };
