@@ -72,6 +72,25 @@ def _resample(samples: np.ndarray, src_rate: int, dst_rate: int) -> np.ndarray:
         ).astype(np.float32)
 
 
+def _apply_edge_fades(samples: np.ndarray, sample_rate: int,
+                      fade_ms: float = 5.0) -> np.ndarray:
+    """
+    Apply a short linear fade-in/out so the clip starts and ends at
+    zero amplitude.  Prevents the audible "click" caused by abrupt
+    steps between adjacent clips during playback (each SOL clip in
+    RESOURCE.AUD plays back-to-back, so any non-zero start/end sample
+    creates a discontinuity that pops on the speakers).
+    """
+    n_fade = max(1, int(sample_rate * fade_ms / 1000.0))
+    if len(samples) < 2 * n_fade:
+        n_fade = max(1, len(samples) // 4)
+    ramp = np.linspace(0.0, 1.0, n_fade, dtype=samples.dtype)
+    s = samples.copy()
+    s[:n_fade]      *= ramp
+    s[-n_fade:]     *= ramp[::-1]
+    return s
+
+
 def _float_to_uint8(samples: np.ndarray) -> bytes:
     pcm = ((np.clip(samples, -1.0, 1.0) + 1.0) * 127.5).astype(np.uint8)
     return pcm.tobytes()
@@ -101,6 +120,7 @@ def wav_to_patch(wav_path: Path, out_path: Path,
     samples, src_rate = _read_wav_as_float(wav_path)
     if src_rate != target_rate:
         samples = _resample(samples, src_rate, target_rate)
+    samples = _apply_edge_fades(samples, target_rate)
     pcm_data = _float_to_uint8(samples)
     wav_bytes = _make_wav_bytes(pcm_data, target_rate)
 

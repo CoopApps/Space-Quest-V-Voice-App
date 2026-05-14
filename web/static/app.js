@@ -532,27 +532,39 @@ $("#status-filter").onchange = e => {
 $("#admin-token").oninput = e => {
     state.adminToken = e.target.value.trim();
     localStorage.setItem("sq5_admin_token", state.adminToken);
-    $("#btn-compile").disabled = !state.adminToken;
+    $("#btn-compile").disabled     = !state.adminToken;
+    $("#btn-compile-aud").disabled = !state.adminToken;
     if (state.detail) renderDetail();
 };
-$("#btn-compile").disabled = !state.adminToken;
-$("#btn-compile").onclick = async () => {
-    setStatus("Compiling patch zip…");
+$("#btn-compile").disabled     = !state.adminToken;
+$("#btn-compile-aud").disabled = !state.adminToken;
+
+async function downloadCompile(path, defaultFilename, label) {
+    setStatus(`Compiling ${label}…`);
     try {
-        const r = await fetch("/api/admin/compile", {
+        const r = await fetch(path, {
             headers: { "X-Admin-Token": state.adminToken },
         });
         if (!r.ok) throw new Error(`${r.status}: ${await r.text()}`);
+        // Honor server-provided filename if any.
+        const cd = r.headers.get("Content-Disposition") || "";
+        const m  = cd.match(/filename="([^"]+)"/);
+        const filename = (m ? m[1] : defaultFilename);
         const blob = await r.blob();
         const url  = URL.createObjectURL(blob);
         const a    = document.createElement("a");
-        a.href     = url; a.download = "sq5_voice_patches.zip"; a.click();
+        a.href     = url; a.download = filename; a.click();
         URL.revokeObjectURL(url);
-        setStatus("Patch zip downloaded.");
+        setStatus(`${label} downloaded.`);
     } catch (e) {
         setStatus("Compile failed: " + e.message);
     }
-};
+}
+
+$("#btn-compile").onclick = () =>
+    downloadCompile("/api/admin/compile",     "sq5_voice_patches.zip", "patches");
+$("#btn-compile-aud").onclick = () =>
+    downloadCompile("/api/admin/compile/aud", "sq5_audio.zip",         "RESOURCE.AUD bundle");
 
 // Initial load
 refreshAll().then(() => setStatus("Ready."));

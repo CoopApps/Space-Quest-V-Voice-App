@@ -48,7 +48,8 @@ from voicestudio.audio.sol import wav_to_patch                    # noqa: E402
 from voicestudio.audio.loader import (                            # noqa: E402
     load_to_wav, AudioLoadError, SUPPORTED_SUFFIXES,
 )
-from voicestudio.packer.audiocache import base36_filename         # noqa: E402
+from voicestudio.packer.audiocache import AudioCache, base36_filename  # noqa: E402
+from voicestudio.packer.repackage import repackage                # noqa: E402
 
 from web.db import init_db, open_db                               # noqa: E402
 
@@ -379,12 +380,79 @@ def admin_delete(contribution_id: int):
     return {"ok": True}
 
 
+@app.get("/api/admin/compile/aud", dependencies=[Depends(require_admin)])
+def admin_compile_full_aud():
+    """
+    Build a complete AUDIO/ folder set (RESOURCE.AUD + per-module MAPs +
+    master 65535.MAP) from every `selected` contribution and stream it
+    back as a zip.  This matches what the desktop tool's "Build
+    RESOURCE.AUD" button produces — drop the AUDIO/ folder into the SQ5
+    install (or distribute it) and the engine picks up every recording
+    in one bundle, no per-line patch files needed.
+    """
+    with open_db(DB_PATH) as con:
+        rows = con.execute("""
+            SELECT module, noun, verb, cond, seq, filename
+            FROM contributions
+            WHERE selected=1
+            ORDER BY module, noun, verb, cond, seq
+        """).fetchall()
+    if not rows:
+        raise HTTPException(400, "Nothing is selected yet — pick recordings first.")
+
+    # Build a transient audiocache full of SOL patches for every
+    # selected contribution, then call the shared `repackage()` pipeline
+    # against it.  We work entirely in a tempdir so concurrent admin
+    # compiles never clobber each other.
+    with tempfile.TemporaryDirectory(prefix="sq5_compile_") as workdir:
+        workroot = Path(workdir)
+        cache_dir   = workroot / "audiocache"
+        build_dir   = workroot / "build"
+        cache_dir.mkdir(); build_dir.mkdir()
+
+        for r in rows:
+            wav_path = line_dir(r["module"], r["noun"], r["verb"],
+                                r["cond"], r["seq"]) / r["filename"]
+            if not wav_path.exists():
+                continue
+            out = cache_dir / str(r["module"]) / base36_filename(
+                r["module"], r["noun"], r["verb"], r["cond"], r["seq"],
+            )
+            out.parent.mkdir(parents=True, exist_ok=True)
+            wav_to_patch(wav_path, out)
+
+        cache    = AudioCache(cache_dir)
+        summary  = repackage(build_dir, cache)
+        audio_dir = build_dir / "AUDIO"
+        if not audio_dir.exists():
+            raise HTTPException(500, "Build produced no AUDIO folder")
+
+        buf = io.BytesIO()
+        with zipfile.ZipFile(buf, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as zf:
+            for f in audio_dir.iterdir():
+                zf.write(f, arcname=f"AUDIO/{f.name}")
+
+    buf.seek(0)
+    fname = (
+        f"sq5_audio_{summary['clips_written']}clips_"
+        f"{summary['modules_written']}modules.zip"
+    )
+    return StreamingResponse(
+        buf,
+        media_type="application/zip",
+        headers={"Content-Disposition": f'attachment; filename="{fname}"'},
+    )
+
+
 @app.get("/api/admin/compile", dependencies=[Depends(require_admin)])
 def admin_compile():
     """
-    Build SCI patch files from every `selected` contribution and stream
-    a zip containing them.  The owner drops these directly into the SQ5
-    game folder to override audio in RESOURCE.AUD.
+    Build individual SCI audio36 patch files from every `selected`
+    contribution and stream them as a zip.  Drop them straight into the
+    SQ5 game folder to override audio one line at a time.
+
+    Use /api/admin/compile/aud for the bundled RESOURCE.AUD + MAPs set
+    (matches desktop's "Build RESOURCE.AUD" output).
     """
     with open_db(DB_PATH) as con:
         rows = con.execute("""
