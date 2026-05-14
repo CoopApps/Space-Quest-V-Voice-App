@@ -185,8 +185,10 @@ def repackage(game_dir: Path, audiocache: AudioCache,
 
     aud_size = abs_offset
 
-    # Second pass: write per-module MAP files
+    # Second pass: write per-module MAP files, recording the base offset
+    # of each module so we can build the master 65535.MAP index after.
     modules_written = 0
+    module_base_offsets: list[tuple[int, int]] = []   # (module, abs_offset)
     for module, recs in by_module.items():
         entries = []
         for rec in recs:
@@ -201,16 +203,51 @@ def repackage(game_dir: Path, audiocache: AudioCache,
         if not entries:
             continue
 
+        # Each module's MAP starts with the abs offset of its first clip.
+        entries.sort()
+        module_base_offsets.append((module, entries[0][4]))
+
         map_path = audio_dir / f"{module}.MAP"
         if not dry_run:
             _write_map_file(map_path, entries)
         modules_written += 1
+
+    # Third pass: write the master 65535.MAP that points at each per-module
+    # MAP's base offset.  Without this, real SCI interpreters won't find
+    # any of the audio36 entries (ScummVM is more forgiving).
+    master_path = audio_dir / "65535.MAP"
+    if not dry_run:
+        _write_master_map(master_path, module_base_offsets)
 
     return {
         "modules_written": modules_written,
         "clips_written":   clips_written,
         "aud_size_bytes":  aud_size,
     }
+
+
+def _write_master_map(map_path: Path,
+                      module_offsets: list[tuple[int, int]]) -> None:
+    """
+    Write the SCI 1.1 master audio map (65535.MAP).
+
+    Format (SQ4/SQ5 / large-AUD variant):
+      [0x90 0x00]                                magic
+      for each module in offset-ascending order:
+        [u16 module_number]  [u32 base_offset]   (6 bytes)
+      [0xFF * 6]                                 terminator
+    """
+    # Sort by absolute offset — matches the convention seen in original
+    # Sierra game files (modules appear in the order their audio data
+    # lives inside RESOURCE.AUD).
+    sorted_entries = sorted(module_offsets, key=lambda x: x[1])
+
+    map_path.parent.mkdir(parents=True, exist_ok=True)
+    with open(map_path, "wb") as f:
+        f.write(MAP_MAGIC)
+        for module, abs_offset in sorted_entries:
+            f.write(struct.pack("<HI", module, abs_offset))
+        f.write(bytes([0xFF] * 6))
 
 
 def verify_against_pharkas(pharkas_dir: Path) -> bool:
