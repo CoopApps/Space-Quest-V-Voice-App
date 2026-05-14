@@ -42,7 +42,7 @@ from voicestudio.packer.repackage import repackage
 # Paths (defaults — overridable via Settings)
 # ---------------------------------------------------------------------------
 DEFAULT_DB       = Path("D:/projects/SQ5/voicestudio/sq5_lines.db")
-DEFAULT_GAME_DIR = Path("D:/projects/sq5")
+DEFAULT_GAME_DIR = Path("D:/sq5voice/Space Quest 5")
 DEFAULT_CACHE    = Path("D:/projects/SQ5/voicestudio/audiocache")
 DEFAULT_WAV_DIR  = Path("D:/projects/SQ5/voicestudio/recordings")
 
