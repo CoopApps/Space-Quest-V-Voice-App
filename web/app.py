@@ -126,6 +126,45 @@ def list_characters():
     return [dict(r) for r in rows]
 
 
+@app.get("/api/contributors")
+def list_contributors():
+    """
+    All contributors with submission stats — for the sidebar's
+    "Contributors" tab.  Includes anyone who has uploaded anything,
+    even if their name isn't in the `contributors` claims table
+    (the claims table is forward-going; older contributions may not
+    have one).
+    """
+    with open_db(DB_PATH) as con:
+        rows = con.execute("""
+            SELECT
+              contributor                              AS name,
+              COUNT(*)                                 AS total,
+              SUM(selected)                            AS selected_count,
+              COUNT(DISTINCT module || '-' || noun || '-' || verb
+                    || '-' || cond || '-' || seq)      AS distinct_lines,
+              MAX(uploaded_at)                         AS last_upload
+            FROM contributions
+            WHERE contributor IS NOT NULL AND contributor != ''
+            GROUP BY contributor COLLATE NOCASE
+            ORDER BY total DESC
+        """).fetchall()
+        # Also list claimed names that have made zero submissions yet
+        # (in case someone reserved a name but didn't upload).
+        claimed = {r["name"].lower() for r in rows}
+        extra = con.execute(
+            "SELECT name, claimed_at FROM contributors"
+        ).fetchall()
+    out = [dict(r) for r in rows]
+    for r in extra:
+        if r["name"].lower() not in claimed:
+            out.append({
+                "name": r["name"], "total": 0, "selected_count": 0,
+                "distinct_lines": 0, "last_upload": None,
+            })
+    return out
+
+
 @app.get("/api/rooms")
 def list_rooms():
     with open_db(DB_PATH) as con:
@@ -155,6 +194,7 @@ def list_lines(
     character:    int | None = Query(None),
     room:         int | None = Query(None),
     search:       str | None = Query(None),
+    contributor:  str | None = Query(None),
     needs_review: bool = Query(False),
     limit:        int  = Query(500, le=2000),
 ):
@@ -169,6 +209,16 @@ def list_lines(
     if search:
         where.append("l.text LIKE ? COLLATE NOCASE")
         params.append(f"%{search}%")
+    if contributor:
+        # Show only lines that this contributor has submitted at least
+        # one recording for.
+        where.append("""EXISTS (
+            SELECT 1 FROM contributions c4
+            WHERE c4.module=l.module AND c4.noun=l.noun AND c4.verb=l.verb
+                  AND c4.cond=l.cond AND c4.seq=l.seq
+                  AND c4.contributor=? COLLATE NOCASE
+        )""")
+        params.append(contributor)
     if needs_review:
         # Multi-contribution lines that don't yet have a canonical pick.
         where.append("""(

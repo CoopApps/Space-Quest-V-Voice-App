@@ -5,9 +5,10 @@ const $  = (sel) => document.querySelector(sel);
 const $$ = (sel) => Array.from(document.querySelectorAll(sel));
 
 const state = {
-    tab:           "characters",   // "characters" | "rooms"
-    selectedCharacter: null,
-    selectedRoom:      null,
+    tab:           "characters",   // "characters" | "rooms" | "contributors"
+    selectedCharacter:   null,
+    selectedRoom:        null,
+    selectedContributor: null,
     statusFilter:  "all",
     search:        "",
     activeLineKey: null,
@@ -214,6 +215,40 @@ async function loadRooms() {
     }
 }
 
+async function loadContributors() {
+    const contribs = await api.get("/api/contributors");
+    const ul    = $("#contributors");
+    const filter = $("#sidebar-filter").value.trim().toLowerCase();
+    ul.innerHTML = "";
+    for (const c of contribs) {
+        if (filter && !c.name.toLowerCase().includes(filter)) continue;
+        const li = document.createElement("li");
+        const pct = c.total ? (c.selected_count / c.total) : 0;
+        if (pct === 1 && c.total > 0)     li.classList.add("complete");
+        else if (pct > 0)                  li.classList.add("partial");
+        if (state.selectedContributor && state.selectedContributor.toLowerCase() === c.name.toLowerCase())
+            li.classList.add("active");
+        // Label: "Name (selected/total)" or "Name (no submissions)" for claims.
+        const detail = c.total > 0
+            ? `${c.selected_count || 0}/${c.total}`
+            : "(no submissions)";
+        li.innerHTML = `
+            <span class="name">${escapeHtml(c.name)}</span>
+            <span class="counts">${detail}</span>
+        `;
+        li.onclick = () => {
+            state.selectedContributor = c.name;
+            state.selectedCharacter   = null;
+            state.selectedRoom        = null;
+            state.search              = "";
+            $("#search").value        = "";
+            loadContributors();
+            loadLines();
+        };
+        ul.appendChild(li);
+    }
+}
+
 function updateOverallProgress(done, total) {
     const pct = total ? Math.round((done / total) * 100) : 0;
     $("#overall-bar").max = total;
@@ -229,6 +264,7 @@ function updateOverallProgress(done, total) {
 async function loadLines() {
     const params = new URLSearchParams();
     if (state.search)            params.set("search", state.search);
+    else if (state.selectedContributor) params.set("contributor", state.selectedContributor);
     else if (state.selectedCharacter !== null) params.set("character", state.selectedCharacter);
     else if (state.selectedRoom !== null)      params.set("room",      state.selectedRoom);
     if (state.statusFilter === "needs-review") params.set("needs_review", "1");
@@ -733,7 +769,7 @@ async function submitBlob(blob, filename) {
 // ---------------------------------------------------------------------------
 
 function refreshAll() {
-    return Promise.all([loadCharacters(), loadRooms()]);
+    return Promise.all([loadCharacters(), loadRooms(), loadContributors()]);
 }
 
 function escapeHtml(s) {
@@ -748,13 +784,14 @@ $$(".tabs .tab").forEach(t => {
         $$(".tabs .tab").forEach(x => x.classList.remove("active"));
         t.classList.add("active");
         state.tab = t.dataset.tab;
-        $("#characters").classList.toggle("hidden", state.tab !== "characters");
-        $("#rooms"     ).classList.toggle("hidden", state.tab !== "rooms");
+        $("#characters"  ).classList.toggle("hidden", state.tab !== "characters");
+        $("#rooms"       ).classList.toggle("hidden", state.tab !== "rooms");
+        $("#contributors").classList.toggle("hidden", state.tab !== "contributors");
     };
 });
 
 // Sidebar filter
-$("#sidebar-filter").oninput = () => { loadCharacters(); loadRooms(); };
+$("#sidebar-filter").oninput = () => { loadCharacters(); loadRooms(); loadContributors(); };
 
 // Search + status filter
 let searchTimer;

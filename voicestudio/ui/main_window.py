@@ -258,6 +258,20 @@ class MainWindow(QMainWindow):
         room_lay.addWidget(self.room_list)
         self.browser_tabs.addTab(room_w, "Rooms")
 
+        # Contributors tab — only meaningful when the DB has a
+        # `contributions` table (i.e. the file is shared with the web
+        # app's pool).  Hidden otherwise so the desktop UI doesn't
+        # mislead single-user installs.
+        contrib_w = QWidget()
+        contrib_lay = QVBoxLayout(contrib_w)
+        contrib_lay.setContentsMargins(0, 4, 0, 0)
+        self.contrib_list = QListWidget()
+        self.contrib_list.currentItemChanged.connect(self._on_contributor_selected)
+        contrib_lay.addWidget(self.contrib_list)
+        self._contrib_tab_widget = contrib_w
+        if self._db_has_contributions():
+            self.browser_tabs.addTab(contrib_w, "Contributors")
+
         self.browser_tabs.currentChanged.connect(self._on_browser_tab_changed)
         lay.addWidget(self.browser_tabs)
 
@@ -524,8 +538,9 @@ class MainWindow(QMainWindow):
             total_done     += done
             total_deployed += dep
 
-        # Also refresh the Rooms tab so both stay in sync.
+        # Also refresh the Rooms + Contributors tabs so all browsers stay in sync.
         self._refresh_rooms(deployed_set=deployed_set)
+        self._refresh_contributors()
 
         self.progress_bar.setMaximum(total_lines)
         self.progress_bar.setValue(total_done)
@@ -590,16 +605,22 @@ class MainWindow(QMainWindow):
             return
 
         # Dispatch to the right loader based on which browser tab is active.
-        if self.browser_tabs.currentIndex() == 0:
+        tab_text = self.browser_tabs.tabText(self.browser_tabs.currentIndex())
+        if tab_text == "Characters":
             item = self.char_list.currentItem()
             if item is None:
                 return
             self._load_lines_for_talker(item.data(Qt.ItemDataRole.UserRole))
-        else:
+        elif tab_text == "Rooms":
             item = self.room_list.currentItem()
             if item is None:
                 return
             self._load_lines_for_module(item.data(Qt.ItemDataRole.UserRole))
+        elif tab_text == "Contributors":
+            item = self.contrib_list.currentItem()
+            if item is None:
+                return
+            self._load_lines_for_contributor(item.data(Qt.ItemDataRole.UserRole))
 
     def _on_search_changed(self, _text: str):
         self._refresh_lines()
@@ -702,11 +723,102 @@ class MainWindow(QMainWindow):
     def _on_browser_tab_changed(self, index: int):
         # Update the line table's first column header to match the active
         # browser, then re-load whatever is selected in that tab.
-        if index == 0:
+        tab_text = self.browser_tabs.tabText(index)
+        if tab_text == "Characters":
             self.line_table.setHorizontalHeaderLabels(["Room", "Text", "Status"])
-        else:
+        elif tab_text == "Rooms":
             self.line_table.setHorizontalHeaderLabels(["Character", "Text", "Status"])
+        elif tab_text == "Contributors":
+            self.line_table.setHorizontalHeaderLabels(["Room", "Text", "Status"])
         self._refresh_lines()
+
+    def _db_has_contributions(self) -> bool:
+        try:
+            con = sqlite3.connect(self.db_path)
+            row = con.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='table' AND name='contributions'"
+            ).fetchone()
+            con.close()
+            return row is not None
+        except Exception:
+            return False
+
+    def _on_contributor_selected(self, current, previous):
+        if current is None:
+            return
+        name = current.data(Qt.ItemDataRole.UserRole)
+        self._load_lines_for_contributor(name)
+
+    def _load_lines_for_contributor(self, contributor: str):
+        """List every line this contributor has uploaded a recording for."""
+        filter_idx = self.filter_combo.currentIndex()
+        where = ("WHERE EXISTS (SELECT 1 FROM contributions c "
+                 "WHERE c.module=lines.module AND c.noun=lines.noun "
+                 "AND c.verb=lines.verb AND c.cond=lines.cond "
+                 "AND c.seq=lines.seq "
+                 "AND c.contributor=? COLLATE NOCASE)")
+        params: list = [contributor]
+        if filter_idx == 1:
+            where += " AND recorded=0"
+        elif filter_idx == 2:
+            where += " AND recorded=1"
+
+        con = sqlite3.connect(self.db_path)
+        rows = con.execute(
+            f"SELECT module,noun,verb,cond,seq,text,recorded,wav_path "
+            f"FROM lines {where} ORDER BY module,noun,verb,cond,seq",
+            params,
+        ).fetchall()
+        con.close()
+
+        self.line_table.setRowCount(0)
+        self._line_data = []
+        for r in rows:
+            module, noun, verb, cond, seq, text, recorded, wav_path = r
+            row_idx = self.line_table.rowCount()
+            self.line_table.insertRow(row_idx)
+            self.line_table.setItem(row_idx, 0, QTableWidgetItem(str(module)))
+            self.line_table.setItem(row_idx, 1, QTableWidgetItem(text))
+            status = "Recorded" if recorded else "Unrecorded"
+            status_item = QTableWidgetItem(status)
+            color = STATUS_COLORS["recorded"] if recorded else STATUS_COLORS["unrecorded"]
+            status_item.setForeground(QColor(color))
+            self.line_table.setItem(row_idx, 2, status_item)
+            self._line_data.append({
+                "module": module, "noun": noun, "verb": verb,
+                "cond": cond, "seq": seq, "text": text,
+                "recorded": recorded, "wav_path": wav_path,
+            })
+
+    def _refresh_contributors(self):
+        """Populate the Contributors tab (shared DB only)."""
+        if not self._db_has_contributions():
+            return
+        self.contrib_list.clear()
+        try:
+            con = sqlite3.connect(self.db_path)
+            rows = con.execute("""
+                SELECT contributor, COUNT(*) as total, SUM(selected) as picks
+                FROM contributions
+                WHERE contributor IS NOT NULL AND contributor != ''
+                GROUP BY contributor COLLATE NOCASE
+                ORDER BY total DESC
+            """).fetchall()
+            con.close()
+        except Exception:
+            return
+        for name, total, picks in rows:
+            picks = picks or 0
+            item = QListWidgetItem(f"{name}  ({picks}/{total})")
+            item.setData(Qt.ItemDataRole.UserRole, name)
+            pct = picks / total if total else 0
+            if pct == 1.0:
+                item.setForeground(QColor(STATUS_COLORS["deployed"]))
+            elif pct > 0:
+                item.setForeground(QColor("#f39c12"))
+            else:
+                item.setForeground(QColor(STATUS_COLORS["unrecorded"]))
+            self.contrib_list.addItem(item)
 
     def _on_character_selected(self, current, previous):
         if current is None:
